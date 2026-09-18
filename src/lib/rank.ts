@@ -113,6 +113,7 @@ function eligibleNight(deal: Deal, intent: ParsedIntent): boolean {
   if (SUBSCRIPTION_IDS.has(deal.id)) return false
   if (deal.id.includes('punchline')) return false
   if (deal.id.includes('savor-3pct')) return false
+  if (deal.id.includes('popcorn')) return false
   if (deal.id.includes('student') && !intent.student) return false
   if (deal.id.includes('military') && !intent.military) return false
   return deal.source_type === 'theater' || deal.vertical === 'night'
@@ -201,6 +202,53 @@ function valueRank(deal: Deal): number {
   return deal.price_low ?? 500
 }
 
+function windowOpenFor(deal: Deal, weekday: number): boolean {
+  if (!isTueOnly(deal)) return true
+  return isTueWed(deal) ? weekday === 2 || weekday === 3 : weekday === 2
+}
+
+function sortForDisplay(picked: Deal[], now: Date): Deal[] {
+  return [...picked].sort((a, b) => {
+    const conf = confRank(b, now) - confRank(a, now)
+    if (conf !== 0) return conf
+    const va = valueRank(a)
+    const vb = valueRank(b)
+    if (a.price_low != null && b.price_low != null && va !== vb) return va - vb
+    return parseMiles(a.distance_note) - parseMiles(b.distance_note)
+  })
+}
+
+function takeGreedy(
+  ranked: { deal: Deal; score: number }[],
+  max: number,
+  opts: {
+    usedGroups: Set<number>
+    usedMerchants: Set<string>
+    skipClosedTue: boolean
+    uniqueMerchant: boolean
+    weekday: number
+    excludeIds?: Set<string>
+    onlyClosedTue?: boolean
+  },
+): Deal[] {
+  const picked: Deal[] = []
+  for (const { deal } of ranked) {
+    if (opts.excludeIds?.has(deal.id)) continue
+    const open = windowOpenFor(deal, opts.weekday)
+    if (opts.skipClosedTue && isTueOnly(deal) && !open) continue
+    if (opts.onlyClosedTue && !(isTueOnly(deal) && !open)) continue
+    const group = conflictIndex(deal.id)
+    if (group >= 0 && opts.usedGroups.has(group)) continue
+    const shop = merchantKey(deal.merchant)
+    if (opts.uniqueMerchant && opts.usedMerchants.has(shop)) continue
+    picked.push(deal)
+    opts.usedMerchants.add(shop)
+    if (group >= 0) opts.usedGroups.add(group)
+    if (picked.length >= max) break
+  }
+  return picked
+}
+
 /** Greedy 1–3 with conflict groups; display order is confidence then value/distance. */
 export function shortlistDeals(
   deals: Deal[],
@@ -213,45 +261,34 @@ export function shortlistDeals(
     .map((deal) => ({ deal, score: scoreDeal(deal, intent, now) }))
     .sort((a, b) => b.score - a.score)
 
-  const picked: Deal[] = []
   const usedGroups = new Set<number>()
   const usedMerchants = new Set<string>()
-  let tueOnlyPicked = 0
   const weekday = weekdayInPt(now)
+  const casualTiming =
+    intent.timing === 'tonight' || intent.timing === 'weekend'
 
-  for (const { deal } of ranked) {
-    const group = conflictIndex(deal.id)
-    if (group >= 0 && usedGroups.has(group)) continue
-    const shop = merchantKey(deal.merchant)
-    if (usedMerchants.has(shop)) continue
-    const tue = isTueOnly(deal)
-    const wed = isTueWed(deal)
-    const windowOpen = wed ? weekday === 2 || weekday === 3 : weekday === 2
-    if (
-      tue &&
-      !windowOpen &&
-      (intent.timing === 'tonight' || intent.timing === 'weekend') &&
-      tueOnlyPicked >= 1
-    ) {
-      continue
-    }
-    picked.push(deal)
-    usedMerchants.add(shop)
-    if (tue && !windowOpen) tueOnlyPicked += 1
-    if (group >= 0) usedGroups.add(group)
-    if (picked.length >= max) break
-  }
-
-  picked.sort((a, b) => {
-    const conf = confRank(b, now) - confRank(a, now)
-    if (conf !== 0) return conf
-    const va = valueRank(a)
-    const vb = valueRank(b)
-    if (a.price_low != null && b.price_low != null && va !== vb) return va - vb
-    return parseMiles(a.distance_note) - parseMiles(b.distance_note)
+  const picked = takeGreedy(ranked, max, {
+    usedGroups,
+    usedMerchants,
+    skipClosedTue: casualTiming,
+    uniqueMerchant: true,
+    weekday,
   })
 
-  return picked
+  if (casualTiming && picked.length < max) {
+    const wait = takeGreedy(ranked, 1, {
+      usedGroups,
+      usedMerchants,
+      skipClosedTue: false,
+      uniqueMerchant: false,
+      weekday,
+      excludeIds: new Set(picked.map((d) => d.id)),
+      onlyClosedTue: true,
+    })
+    picked.push(...wait)
+  }
+
+  return sortForDisplay(picked, now)
 }
 
 export function tueCaveats(deals: Deal[], intent: ParsedIntent, now: Date = new Date()): string[] {

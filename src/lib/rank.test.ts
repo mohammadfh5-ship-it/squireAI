@@ -51,6 +51,8 @@ describe('oil / haircut / movie shortlists', () => {
     expect(deals.every((d) => d.vertical === 'night' && d.kill_reason == null)).toBe(
       true,
     )
+    expect(deals.some((d) => d.id.includes('popcorn'))).toBe(false)
+    expect(deals.some((d) => d.id.includes('matinee'))).toBe(true)
   })
 })
 
