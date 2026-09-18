@@ -188,6 +188,11 @@ function conflictIndex(id: string): number {
   return CONFLICT_GROUPS.findIndex((group) => group.includes(id))
 }
 
+/** Same shop, different offer titles — keep one so the 1–3 is not a coupon dump. */
+export function merchantKey(merchant: string): string {
+  return merchant.split('—')[0].split('(')[0].trim().toLowerCase()
+}
+
 function confRank(deal: Deal, now: Date): number {
   return displayConfidence(deal, now) === 'confirmed_today' ? 1 : 0
 }
@@ -210,11 +215,29 @@ export function shortlistDeals(
 
   const picked: Deal[] = []
   const usedGroups = new Set<number>()
+  const usedMerchants = new Set<string>()
+  let tueOnlyPicked = 0
+  const weekday = weekdayInPt(now)
 
   for (const { deal } of ranked) {
     const group = conflictIndex(deal.id)
     if (group >= 0 && usedGroups.has(group)) continue
+    const shop = merchantKey(deal.merchant)
+    if (usedMerchants.has(shop)) continue
+    const tue = isTueOnly(deal)
+    const wed = isTueWed(deal)
+    const windowOpen = wed ? weekday === 2 || weekday === 3 : weekday === 2
+    if (
+      tue &&
+      !windowOpen &&
+      (intent.timing === 'tonight' || intent.timing === 'weekend') &&
+      tueOnlyPicked >= 1
+    ) {
+      continue
+    }
     picked.push(deal)
+    usedMerchants.add(shop)
+    if (tue && !windowOpen) tueOnlyPicked += 1
     if (group >= 0) usedGroups.add(group)
     if (picked.length >= max) break
   }

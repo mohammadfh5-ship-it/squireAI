@@ -40,6 +40,8 @@ describe('oil / haircut / movie shortlists', () => {
     expect(deals.every((d) => d.vertical === 'style' && d.kill_reason == null)).toBe(
       true,
     )
+    const shops = deals.map((d) => d.merchant.split('—')[0].trim())
+    expect(new Set(shops).size).toBe(shops.length)
   })
 
   it('movies tonight returns 1–3 night keepers from seed', () => {
